@@ -3,18 +3,40 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os, json, random, time
 from datetime import datetime
+import ssl, certifi
+
+# ✅ Force Python to use correct SSL certificates
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = certifi.where()
+
+# ✅ Fix SSL context for Firestore client
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+
 
 # --------------- Firebase init (local JSON or Render ENV) ---------------
 if not firebase_admin._apps:
-    local_path = r"D:\OneDrive\Desktop\streamlit project\MamlaStremlit\tambola-2ad18-firebase-adminsdk-fbsvc-ded93605df.json"
+
+    # ✅ Absolute path to your firebase.json
+    local_path = r"D:\OneDrive\Desktop\streamlit project\TambolaFolder\firebase.json"
+
     if os.path.exists(local_path):
         cred = credentials.Certificate(local_path)
     else:
         firebase_key = os.environ.get("FIREBASE_KEY")
+        if not firebase_key:
+            raise RuntimeError(
+                "Firebase credentials not found. "
+                "Place firebase.json next to tambola2.py OR set FIREBASE_KEY env."
+            )
         cred_dict = json.loads(firebase_key)
         cred = credentials.Certificate(cred_dict)
+
     firebase_admin.initialize_app(cred)
 
+# ✅ Now this WILL WORK (only if firebase init is successful)
 db = firestore.client()
 
 # --------------- Helpers ---------------
@@ -192,10 +214,6 @@ def render_ticket(grid, marked, my_color="#ffd166", clickable=False, on_click=No
                     st.markdown(cell_html(val, bg=bg, fg=fg, brd=brd), unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-def autorefresh():
-    st.experimental_set_query_params(ts=str(time.time()))
-    st.experimental_rerun()
-
 # --------------- Existing auth/room utilities from your app ---------------
 def add_user(username, password):
     db.collection("users").document(username).set({"username": username, "password": password})
@@ -240,7 +258,7 @@ st.title("🎯 Tambola Realtime (Render + Firebase)")
 
 # session
 ss = st.session_state
-for k,v in {"logged_in":False,"role":None,"username":None,"room_code":None}.items():
+for k,v in {"logged_in":False,"role":None,"username":None,"room_code":None,"auto_refresh":True}.items():
     if k not in ss: ss[k]=v
 
 # auth
@@ -303,13 +321,20 @@ if not room_doc_s.exists:
 room = room_doc_s.to_dict()
 colors = ensure_colors(room)
 
-# auto refresh to simulate realtime
-st.experimental_set_query_params(_=str(time.time()))
-st_autorefresh = st.sidebar.checkbox("Auto-refresh (2s)", value=True)
-if st_autorefresh:
-    st.experimental_singleton.clear()  # light nudge
-    st.experimental_memo.clear()
-    st.experimental_rerun  # no-op placeholder
+# ✅ Auto-refresh (Fixed implementation)
+auto_refresh = st.sidebar.checkbox("Auto-refresh (2s)", value=ss.auto_refresh)
+ss.auto_refresh = auto_refresh
+
+# Show refresh status
+if ss.auto_refresh:
+    refresh_placeholder = st.sidebar.empty()
+    refresh_placeholder.info("🔄 Auto-refresh enabled")
+    
+    # Add a small delay before refresh
+    time.sleep(2)
+    st.rerun()
+else:
+    st.sidebar.info("⏸️ Auto-refresh paused")
 
 colL, colR = st.columns([2,2])
 
@@ -330,7 +355,7 @@ if ss.role=="Admin":
                 issue_tickets_to_all(room)
                 room_ref.update({"status":"started","numbers_drawn":[],"current_number":None,"started_ts":datetime.utcnow().isoformat()})
                 st.success("Game started! Tickets issued.")
-                st.experimental_rerun()
+                st.rerun()
         else:
             # draw number section + bag animation
             st.subheader("🎒 Draw Numbers")
@@ -345,7 +370,7 @@ if ss.role=="Admin":
                     spot.markdown(f"<div style='font-size:54px;text-align:center'>🎉 <b>{n}</b></div>", unsafe_allow_html=True)
                 else:
                     st.info("All numbers drawn.")
-                st.experimental_rerun()
+                st.rerun()
 
     with colR:
         st.subheader("Common Board (1–90)")
@@ -367,7 +392,7 @@ else:
         st.subheader("Your Ticket")
         tdoc = get_user_ticket(room["code"], ss.username)
         if not tdoc:
-            st.info("Admin hasn’t started the game yet. Waiting for ticket…")
+            st.info("Admin hasn't started the game yet. Waiting for ticket…")
         else:
             my_color = colors.get(ss.username, "#ffd166")
             # clickable grid to toggle mark
@@ -390,7 +415,7 @@ else:
                             lbl = f"✖ {val}" if is_marked else str(val)
                             if st.button(lbl, key=f"btn_{val}_{r}_{c}"):
                                 toggle_mark(room["code"], ss.username, val)
-                                st.experimental_rerun()
+                                st.rerun()
 
             st.caption("Tip: Click a number to toggle a soft cross ✖ on your ticket.")
 
